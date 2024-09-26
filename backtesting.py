@@ -60,3 +60,175 @@ def load_data(file_path):
     if 'bitcoin' in file_path.lower():
         return data, 'BTC'
     return data, 'AAPL'
+
+def backtest(data, indicators, params, ticker):
+    capital = 1_000_000  # Initial capital
+    blocked_capital = 0  # Capital blocked by short positions
+    COM = 0.125 / 100  # Commission rate (0.125%)
+    MIN_CAPITAL_THRESHOLD = 500_000  # Minimum capital threshold for new trades
+    RISK_PER_TRADE = 0.002  # Risk per trade (0.2%)
+    active_positions = []
+    portfolio_value = []  # Track portfolio value at every time step
+    num_long_wins, num_long_losses = 0, 0
+    num_short_wins, num_short_losses = 0, 0
+
+    # Apply indicators to dataset
+    data = apply_indicators(data, indicators, params)
+
+    # Simulate backtest
+    for i, row in data.iterrows():
+        # Handle closing of active positions
+        for position in active_positions.copy():
+            if not position.short:
+                # Handle long positions
+                trailing_stop = max(position.price * (1 - params["sl"]),
+                                    row.Close * (1 - params.get("trailing_sl", 0.02)))
+                if row.Close > position.price * (1 + params["tp"]):  # Take-profit
+                    capital += row.Close * position.n_shares * (1 - COM)
+                    active_positions.remove(position)
+                    num_long_wins += 1
+                elif row.Close < trailing_stop:  # Stop-loss or trailing stop
+                    capital += row.Close * position.n_shares * (1 - COM)
+                    active_positions.remove(position)
+                    num_long_losses += 1
+            if position.short:
+                # Handle short positions
+                trailing_stop = min(position.price * (1 + params["sl"]),
+                                    row.Close * (1 + params.get("trailing_sl", 0.02)))
+                if row.Close < position.price * (1 - params["tp"]):  # Take-profit for short
+                    profit = (position.price - row.Close) * position.n_shares * (1 - COM)
+                    capital += profit
+                    blocked_capital -= position.price * position.n_shares
+                    active_positions.remove(position)
+                    num_short_wins += 1
+                elif row.Close > trailing_stop:  # Stop-loss or trailing stop for short
+                    loss = (row.Close - position.price) * position.n_shares * (1 + COM)
+                    capital -= loss
+                    blocked_capital -= position.price * position.n_shares
+                    active_positions.remove(position)
+                    num_short_losses += 1
+
+        # Ensure portfolio value is tracked at every step
+        current_portfolio_value = update_portfolio_value(active_positions, row.Close, capital, COM)
+        portfolio_value.append(current_portfolio_value)
+
+        # Check if new positions can be opened
+        if len(active_positions) >= params["max_active_positions"]:
+            continue  # Skip if max active positions are reached
+
+        # Define the number of shares based on the ticker
+        n_shares = params["n_shares"] if ticker == 'AAPL' else float(params["n_shares"])
+
+        # Señal RSI
+        if "RSI" in indicators:
+            if row["rsi"] < params["rsi_lower"]:  # Señal de compra
+                cost = row.Close * params["n_shares"] * (1 + COM)
+                if capital - blocked_capital > cost and capital >= MIN_CAPITAL_THRESHOLD:
+                    capital -= cost
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=params["n_shares"], timestamp=row.name,
+                                 short=False))
+            elif row["rsi"] > params["rsi_upper"]:  # Señal de venta (corto)
+                cost = row.Close * params["n_shares"]
+                if capital - blocked_capital >= cost:
+                    blocked_capital += cost
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=params["n_shares"], timestamp=row.name,
+                                 short=True))
+
+        # Señal MACD
+        if "MACD" in indicators:
+            if row["macd_diff"] > 0:  # Señal de compra
+                cost = row.Close * params["n_shares"] * (1 + COM)
+                if capital - blocked_capital > cost and capital >= MIN_CAPITAL_THRESHOLD:
+                    capital -= cost
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=params["n_shares"], timestamp=row.name,
+                                 short=False))
+            elif row["macd_diff"] < 0:  # Señal de venta (corto)
+                cost = row.Close * params["n_shares"]
+                if capital - blocked_capital >= cost:
+                    blocked_capital += cost
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=params["n_shares"], timestamp=row.name,
+                                 short=True))
+
+        # Señal Bollinger Bands
+        if "Bollinger" in indicators:
+            if row["bollinger_l"] == 1:  # Señal de compra (banda inferior)
+                cost = row.Close * params["n_shares"] * (1 + COM)
+                if capital - blocked_capital > cost and capital >= MIN_CAPITAL_THRESHOLD:
+                    capital -= cost
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=params["n_shares"], timestamp=row.name,
+                                 short=False))
+            elif row["bollinger_h"] == 1:  # Señal de venta (corto) (banda superior)
+                cost = row.Close * params["n_shares"]
+                if capital - blocked_capital >= cost:
+                    blocked_capital += cost
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=params["n_shares"], timestamp=row.name,
+                                 short=True))
+
+        # Señal SMA (Simple Moving Average)
+        if "SMA" in indicators:
+            if row["Close"] > row["sma"]:  # Señal de compra
+                cost = row.Close * params["n_shares"] * (1 + COM)
+                if capital - blocked_capital > cost and capital >= MIN_CAPITAL_THRESHOLD:
+                    capital -= cost
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=params["n_shares"], timestamp=row.name,
+                                 short=False))
+            elif row["Close"] < row["sma"]:  # Señal de venta (corto)
+                cost = row.Close * params["n_shares"]
+                if capital - blocked_capital >= cost:
+                    blocked_capital += cost
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=params["n_shares"], timestamp=row.name,
+                                 short=True))
+
+        # Ajuste del tamaño de posición basado en ATR
+        if "ATR" in indicators:
+            atr_value = row["atr"]
+            shares_per_trade = position_size(atr_value, capital - blocked_capital, RISK_PER_TRADE)
+
+            if atr_value > 0:
+                if capital - blocked_capital > row.Close * shares_per_trade * (1 + COM):
+                    capital -= row.Close * shares_per_trade * (1 + COM)
+                    active_positions.append(
+                        Position(ticker="AAPL", price=row.Close, n_shares=shares_per_trade, timestamp=row.name,
+                                 short=False))
+
+        # Actualizar el valor del portafolio
+        current_portfolio_value = update_portfolio_value(active_positions, row.Close, capital, COM)
+        portfolio_value.append(current_portfolio_value)
+
+
+    for position in active_positions.copy():
+        if position.short:
+            profit = (position.price - data.iloc[-1]['Close']) * position.n_shares * (1 - COM)
+            capital += profit
+            blocked_capital -= position.price * position.n_shares
+        else:
+            capital += data.iloc[-1]['Close'] * position.n_shares * (1 - COM)
+        active_positions.remove(position)
+
+        # Add the final portfolio value
+    portfolio_value[-1] = update_portfolio_value(active_positions, data.iloc[-1]['Close'], capital, COM)
+
+    return capital, portfolio_value, {'long_win': num_long_wins, 'long_loss': num_long_losses,
+                                      'short_win': num_short_wins, 'short_loss': num_short_losses}
+
+# Cálculo del Sharpe Ratio
+def calculate_sharpe_ratio(returns, risk_free_rate=0.01):
+    excess_returns = np.mean(returns) - risk_free_rate
+    std_dev = np.std(returns)
+    if std_dev == 0:
+        return 0
+    return excess_returns / std_dev
+
+# Cálculo del Max Drawdown
+def calculate_max_drawdown(portfolio_values):
+    peak = np.maximum.accumulate(portfolio_values)
+    drawdown = (portfolio_values - peak) / peak
+    return np.min(drawdown)
