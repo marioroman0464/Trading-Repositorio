@@ -232,3 +232,93 @@ def calculate_max_drawdown(portfolio_values):
     peak = np.maximum.accumulate(portfolio_values)
     drawdown = (portfolio_values - peak) / peak
     return np.min(drawdown)
+
+def optimize(trial, data, indicators, ticker):
+    params = {}
+    if "RSI" in indicators:
+        params["rsi_window"] = trial.suggest_int("rsi_window", 5, 10)
+        params["rsi_lower"] = trial.suggest_int("rsi_lower", 30, 50)
+        params["rsi_upper"] = trial.suggest_int("rsi_upper", 50, 70)
+    if "SMA" in indicators:
+        params["sma_window"] = trial.suggest_int("sma_window", 10, 50)
+    if "MACD" in indicators:
+        params["fast_period"] = trial.suggest_int("fast_period", 5, 20)
+        params["slow_period"] = trial.suggest_int("slow_period", 20, 50)
+        params["signal_period"] = trial.suggest_int("signal_period", 5, 15)
+    if "Bollinger" in indicators:
+        params["bollinger_window"] = trial.suggest_int("bollinger_window", 10, 15)
+    if "ATR" in indicators:
+        params["atr_window"] = trial.suggest_int("atr_window", 20, 60)
+
+    # Stop-loss, take-profit, y trailing stop
+    params["sl"] = trial.suggest_float("sl", 0.02, 0.1)
+    params["tp"] = trial.suggest_float("tp", 0.01, 0.08)
+    params["trailing_sl"] = trial.suggest_float("trailing_sl", 0.01, 0.03)  # Añadir trailing stop
+
+    # Optimizar el número de acciones dependiendo si es Apple (entero) o Bitcoin (float)
+    if ticker == 'BTC':  # Si es Bitcoin, optimiza un número flotante de acciones
+        params["n_shares"] = trial.suggest_float("n_shares", 0.1, 10.0)  # Fracciones permitidas
+    else:  # Si es Apple, optimiza un número entero de acciones
+        params["n_shares"] = trial.suggest_int("n_shares", 5, 20)  # Solo enteros permitidos
+
+    # Máximo de posiciones activas
+    params["max_active_positions"] = trial.suggest_int("max_active_positions", 10, 30)
+
+    # Realizar backtest
+    final_capital, portfolio_value, win_loss_ratio = backtest(data, indicators, params, ticker)
+    returns = np.diff(portfolio_value) / portfolio_value[:-1]
+
+    # Verificar valores NaN
+    if np.isnan(returns).any():
+        raise optuna.TrialPruned()
+
+    sharpe_ratio = calculate_sharpe_ratio(returns)
+    max_drawdown = calculate_max_drawdown(portfolio_value)
+
+    # Establecer una penalización por drawdown significativo
+    drawdown_penalty_weight = 0.6  # Penalización más fuerte para drawdown
+    adjusted_objective = sharpe_ratio
+
+    return adjusted_objective
+
+
+def run_optimization_and_backtest(data, ticker):
+    indicators = ["RSI", "SMA", "MACD", "Bollinger", "ATR"]
+    best_combination, best_params = None, None
+    best_sharpe_ratio, best_win_loss_ratio = -np.inf, None
+    best_final_capital, best_portfolio_value = None, None
+    best_max_drawdown = None
+
+    # Probar todas las combinaciones de indicadores
+    for r in range(1, len(indicators) + 1):
+        for combination in combinations(indicators, r):
+            print(f"Optimizing combination: {combination}")
+            # Crear un estudio fresco sin retención de memoria
+            study = optuna.create_study(direction="maximize")
+            study.optimize(lambda trial: optimize(trial, data, combination, ticker), n_trials=30)  # Incrementar el número de trials para una mejor optimización
+
+            # Obtener el mejor trial
+            best_trial = study.best_trial
+            params = best_trial.params
+
+            # Ejecutar el backtest con los mejores parámetros
+            final_capital, portfolio_value, win_loss_ratio = backtest(data, combination, params, ticker)
+            returns = np.diff(portfolio_value) / portfolio_value[:-1]
+
+            # Calcular métricas de rendimiento
+            sharpe_ratio = calculate_sharpe_ratio(returns)
+            max_drawdown = calculate_max_drawdown(portfolio_value)
+
+            # Comparar resultados y guardar la mejor estrategia
+            if sharpe_ratio > best_sharpe_ratio:
+                best_sharpe_ratio = sharpe_ratio
+                best_combination = combination
+                best_params = params
+                best_final_capital = final_capital
+                best_portfolio_value = portfolio_value
+                best_win_loss_ratio = win_loss_ratio
+                best_max_drawdown = max_drawdown
+
+    # Retornar los mejores resultados encontrados
+    return (best_combination, best_params, best_final_capital,
+            best_portfolio_value, best_win_loss_ratio, best_sharpe_ratio, best_max_drawdown)
