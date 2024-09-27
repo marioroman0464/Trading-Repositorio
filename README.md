@@ -30,7 +30,7 @@ pip install -r requirements.txt
 ```
 5. Run the program
 ```python
-write "main.py" to run the program 
+write "python main.py" to run the program 
 ```
 
 ## Repository structure
