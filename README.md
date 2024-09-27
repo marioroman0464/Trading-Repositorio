@@ -10,7 +10,7 @@ The objective of this project is to create an algorithm that optimizes buy and s
 The main objective of this project is to optimize an algorithm for efficient trading using technical indicators like RSI, MACD, Bollinger Bands, SMA, and ATR. We optimize buy/sell signals by adjusting the parameters of each indicator, aiming to find the best combination for positive results. The results are detailed in the PDF.To get started with this repository, you will need to have Python installed on your machine. We recommend using Python 3.10 or higher.
 
 To get started with this repository, you will need to have Python installed. We recommend using Python 3.10 or higher.
-1.Fork this repository
+1. Fork this repository
 2. Clone the repo
 
 ```python
@@ -28,6 +28,11 @@ source venv/bin/activate  # On Windows use `.venv\Scripts\activate`
 ```python
 pip install -r requirements.txt
 ```
+5. Run the program
+```python
+write "main.py" to run the program 
+```
+
 ## Repository structure
 
 ---
